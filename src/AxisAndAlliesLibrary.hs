@@ -2,49 +2,69 @@ module AxisAndAlliesLibrary where
 
 import Data.List
 
-data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | Submarine | Transport | Destroyer | Cruiser | AircraftCarrier | Battleship | DamagedBattleship deriving (Show, Eq, Ord, Enum, Read)
+data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | Submarine | Transport | Destroyer | Cruiser | AircraftCarrier | Battleship | DamagedBattleship deriving (Show, Eq, Ord, Enum, Read, Bounded)
 
-baseAttackValue :: Unit -> Int
-baseAttackValue Infantry = 1
-baseAttackValue Artillery = 2
-baseAttackValue Tank = 3
-baseAttackValue AntiAirArtillery = 0
-baseAttackValue Fighter = 3
-baseAttackValue Bomber = 4
-baseAttackValue Submarine = 2
-baseAttackValue Transport = 0
-baseAttackValue Destroyer = 2
-baseAttackValue Cruiser = 3
-baseAttackValue AircraftCarrier = 1
-baseAttackValue Battleship = 4
+landUnits :: [Unit]
+landUnits = [Infantry, Artillery, Tank, AntiAirArtillery]
 
-baseDefenseValue :: Unit -> Int
-baseDefenseValue Infantry = 2
-baseDefenseValue Artillery = 2
-baseDefenseValue Tank = 2
-baseDefenseValue AntiAirArtillery = 1
-baseDefenseValue Fighter = 4
-baseDefenseValue Bomber = 1
-baseDefenseValue Submarine = 1
-baseDefenseValue Transport = 0
-baseDefenseValue Destroyer = 2
-baseDefenseValue Cruiser = 3
-baseDefenseValue AircraftCarrier = 2
-baseDefenseValue Battleship = 4
+airUnits :: [Unit]
+airUnits = [Fighter, Bomber]
 
-baseHitpoints :: Unit -> Int
-baseHitpoints Infantry = 1
-baseHitpoints Artillery = 1
-baseHitpoints Tank = 1
-baseHitpoints AntiAirArtillery = 1
-baseHitpoints Fighter = 1
-baseHitpoints Bomber = 1
-baseHitpoints Submarine = 1
-baseHitpoints Transport = 1
-baseHitpoints Destroyer = 1
-baseHitpoints Cruiser = 1
-baseHitpoints AircraftCarrier = 1
-baseHitpoints Battleship = 2
+seaUnits :: [Unit]
+seaUnits = [Submarine, Transport, Destroyer, Cruiser, AircraftCarrier, Battleship, DamagedBattleship]
+
+attackValue :: Unit -> Int
+attackValue Infantry = 1
+attackValue Artillery = 2
+attackValue Tank = 3
+attackValue AntiAirArtillery = 0
+attackValue Fighter = 3
+attackValue Bomber = 4
+attackValue Submarine = 2
+attackValue Transport = 0
+attackValue Destroyer = 2
+attackValue Cruiser = 3
+attackValue AircraftCarrier = 1
+attackValue Battleship = 4
+attackValue DamagedBattleship = attackValue Battleship
+
+attacks :: Unit -> [Unit]
+attacks Infantry = landUnits ++ airUnits
+attacks Artillery = landUnits ++ airUnits
+attacks Tank = landUnits ++ airUnits
+attacks AntiAirArtillery = airUnits
+attacks Fighter = landUnits ++ airUnits ++ seaUnits
+attacks Bomber = landUnits ++ airUnits ++ seaUnits
+attacks Submarine = seaUnits
+attacks Transport = []
+attacks Destroyer = airUnits ++ seaUnits
+attacks Cruiser = landUnits ++ airUnits ++ seaUnits
+attacks AircraftCarrier = airUnits ++ seaUnits
+attacks Battleship = landUnits ++ airUnits ++ seaUnits
+attacks DamagedBattleship = attacks Battleship
+
+defenseValue :: Unit -> Int
+defenseValue Infantry = 2
+defenseValue Artillery = 2
+defenseValue Tank = 2
+defenseValue AntiAirArtillery = 1
+defenseValue Fighter = 4
+defenseValue Bomber = 1
+defenseValue Submarine = 1
+defenseValue Transport = 0
+defenseValue Destroyer = 2
+defenseValue Cruiser = 3
+defenseValue AircraftCarrier = 2
+defenseValue Battleship = 4
+defenseValue DamagedBattleship = attackValue Battleship
+
+onDestruction :: Unit -> [Unit]
+onDestruction Battleship = [DamagedBattleship]
+onDestruction _ = []
+
+numberOfShots :: Unit -> Int
+numberOfShots AntiAirArtillery = 3
+numberOfShots _ = 1
 
 unitCost :: Unit -> Int
 unitCost Infantry = 3
@@ -59,65 +79,55 @@ unitCost Destroyer = 8
 unitCost Cruiser = 12
 unitCost AircraftCarrier = 14
 unitCost Battleship = 20
+unitCost DamagedBattleship = unitCost Battleship
 
-compressArmy :: Army -> Army
-compressArmy ((FiUn (a1, u1)):(FiUn (a2, u2)):ls)
-  | a1 <= 0 = compressArmy ((FiUn (a2, u2)):ls)
-  | u1 == u2 = compressArmy ((FiUn (a1 + a2, u1)):ls)
-  | otherwise = (FiUn (a1, u1)):(compressArmy ((FiUn (a2, u2)):ls))
-compressArmy [x] = [x]
-compressArmy [] = []
 
-reduceArmy :: Army -> Army
-reduceArmy = compressArmy . sort
+lowestIPCFirstLandUnits = sortOn unitCost landUnits
+lowestIPCFirstAirUnits = sortOn unitCost airUnits
+lowestIPCFirstSeaUnits = sortOn unitCost seaUnits
+lowestIPCFirstSeaUnitsOpt = nub (Battleship:lowestIPCFirstSeaUnits)
+lowestIPCFirst = sortOn unitCost (lowestIPCFirstLandUnits ++ lowestIPCFirstAirUnits ++ lowestIPCFirstSeaUnits)
+lowestIPCFirstOpt = nub (Battleship:lowestIPCFirst)
 
-addToArmy :: FightUnit -> Army -> Army
-addToArmy fu a = reduceArmy (fu:a)
 
-mergeArmies :: Army -> Army -> Army
-mergeArmies army0 army1 = reduceArmy (army0 ++ army1)
+generalCombatAttackValues :: [Unit] -> [Int]
+generalCombatAttackValues attackingArmy = sort (generalCombatAttackValues' (sort attackingArmy))
 
-removeFromArmy :: FightUnit -> Army -> Army
-removeFromArmy fu army = reduceArmy (removeFromArmy' fu army)
+generalCombatAttackValues' :: [Unit] -> [Int]
+generalCombatAttackValues' (Infantry:army)
+  | elem Artillery army = 2:2:(generalCombatAttackValues' (delete Artillery army))
+  | otherwise = 1:(generalCombatAttackValues' army)
+generalCombatAttackValues' (unit:army) = (attackValue unit):(generalCombatAttackValues' army)
+generalCombatAttackValues' [] = []
+
+generalCombatDefenseValues :: [Unit] -> [Int]
+generalCombatDefenseValues = (map defenseValue) . sort
+
+generalCombatAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
+generalCombatAppliedLosses army _ 0 = army
+generalCombatAppliedLosses [] _ _ = []
+generalCombatAppliedLosses army lossProfile@(next:lp) n
+  | army `elem` next = generalCombatAppliedLosses (delete next army) lossProfile (n-1)
+  | otherwise = generalCombatAppliedLosses army lp n
+
+airDefenseValues :: [Unit] -> [Unit] -> [Int]
+airDefenseValues attackingArmy defendingArmy = replicate nrOfShots (defenseValue AntiAirArtillery)
   where
-    removeFromArmy' _ [] = []
-    removeFromArmy' (FiUn (0, _)) army = army
-    removeFromArmy' (FiUn (a0, u0)) ((FiUn (a1, u1)):army)
-      | u0 == u1 = (FiUn (a1', u1)):(removeFromArmy' (FiUn (a0', u0)) army)
-      | otherwise = (FiUn (a1, u1)):(removeFromArmy' (FiUn (a0, u0)) army)
-      where
-        removed = min a0 a1
-        a0' = max 0 (a0 - removed)
-        a1' = max 0 (a1 - removed)
+    nrOfShots = min (nrOfAAA * 3) nrOfAirUnits
+    nrOfAAA = count AntiAirArtillery defendingArmy
+    nrOfAirUnits = countIf (`elem` airUnits) attackingArmy
 
+airDefenseAppliedLosses :: [Unit] -> [Unit] -> Int -> [Int]
+airDefenseAppliedLosses army lossProfile n = generalCombatAppliedLosses army (lossProfile \\ airUnits) n
 
-lossesOfArmy :: [FightUnit] -> Army -> Army
-lossesOfArmy [] army = army
-lossesOfArmy _ [] = []
-lossesOfArmy losses army = foldl (flip removeFromArmy) army losses
+offshoreBombardmentValues :: [Unit] -> [Int]
+offshoreBombardmentValues = (map attackValue) . sort
 
-nrOfUnits :: Unit -> Army -> Int
-nrOfUnits _ [] = 0
-nrOfUnits unit ((FiUn (a, u)):army)
-  | unit == u = a + (nrOfUnits unit army)
-  | otherwise = nrOfUnits unit army
+offshoreBombardmentAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
+offshoreBombardmentAppliedLosses = generalCombatAppliedLosses
 
---TODO
-fightUnitToAttackValue :: FightUnit -> FightValue
-fightUnitToAttackValue (FiUn (a, u)) = FiVa (a, baseAttackValue u)
+countIf :: (a -> Bool) -> [a] -> Int
+countIf predicate = length . (filter predicate)
 
-attackFirePower :: Army -> FirePower
-attackFirePower a = firePower
-  where
-    firePower = map fightUnitToFightValue army'
-    army' = removeFromArmy (FiUn (matchedInfantry, Infantry)) (addToArmy (FiUn (matchedInfantry, Artillery)) army)
-    matchedInfantry = min nrOfInfantries nrOfArtilleries
-    nrOfInfantries = nrOfUnits Infantry army
-    nrOfArtilleries = nrOfUnits Artillery army
-    army = reduceArmy a
-
-defendFirePower :: Army -> FirePower
-defendFirePower a = firePower
-  where
-    firePower = map fightUnitToFightValue army
-    army = reduceArmy a
+count :: Eq a => a -> [a] -> Int
+count el = countIf (== el)
