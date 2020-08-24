@@ -1,17 +1,67 @@
 module AxisAndAlliesLibrary where
 
 import Data.List
+import Data.Ratio
 
 data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | Submarine | Transport | Destroyer | Cruiser | AircraftCarrier | Battleship | DamagedBattleship deriving (Show, Eq, Ord, Enum, Read, Bounded)
+
+approx :: (Fractional a) => Rational -> a
+approx rat = num / den
+  where
+    num = fromInteger $ numerator rat
+    den = fromInteger $ denominator rat
+
+binomial :: (Integral int) => int -> int -> Integer
+binomial _ 0 = 1
+binomial 0 _ = 0
+binomial n 1 = fromIntegral n
+binomial n k
+  | n == k = 1
+  | n < k = 0
+  | otherwise = binomial' (fromIntegral n) (fromIntegral k)
+
+binomial' :: Integer -> Integer -> Integer
+binomial' n k = product num'' `quot` (product (den1' ++ den2'))
+  where
+    num'' = num' \\ common'
+    den2' = den2 \\ common'
+    common' = intersect num' den2
+    num' = num \\ common
+    den1' = den1 \\ common
+    common = intersect num den1
+    num = [2..n]
+    den1 = [2..k]
+    den2 = [2..(n-k)]
+
+binomialDistributionOfDiceThrows :: (Integral h, Integral n, Integral f) => h -> n -> f -> Rational
+binomialDistributionOfDiceThrows hits throws face = binomialDistributionOfDiceThrows' (fromIntegral hits) (fromIntegral throws) (fromIntegral face)
+  where
+    binomialDistributionOfDiceThrows' :: Integer -> Integer -> Integer -> Rational
+    binomialDistributionOfDiceThrows' _ 0 _ = 0
+    binomialDistributionOfDiceThrows' 0 n f = (1 - (f % 6))^n
+    binomialDistributionOfDiceThrows' 1 n f = (n % 1) * (f % 6) * ((1 - (f % 6))^(n-1))
+    binomialDistributionOfDiceThrows' 2 n f = (n^2 % 2) * p^2 * (1 - p)^(n-2) - (n % 2) * p^2 * (1 - p)^(n-2)
+      where
+        p = (f % 6)
+    binomialDistributionOfDiceThrows' h n 1 = (1 % (6^n)) * 5^(n-h) * ((binomial n h) % 1)
+    binomialDistributionOfDiceThrows' h n 2 = (1 % (3^n)) * 2^(n-h) * ((binomial n h) % 1)
+    binomialDistributionOfDiceThrows' h n 3 = (1 % (2^n)) * ((binomial n h) % 1)
+    binomialDistributionOfDiceThrows' h n 4 = (1 % (3^n)) * 2^h * ((binomial n h) % 1)
+
+
+
 
 landUnits :: [Unit]
 landUnits = [Infantry, Artillery, Tank, AntiAirArtillery]
 
+
 airUnits :: [Unit]
 airUnits = [Fighter, Bomber]
 
+
 seaUnits :: [Unit]
 seaUnits = [Submarine, Transport, Destroyer, Cruiser, AircraftCarrier, Battleship, DamagedBattleship]
+
 
 attackValue :: Unit -> Int
 attackValue Infantry = 1
@@ -28,6 +78,7 @@ attackValue AircraftCarrier = 1
 attackValue Battleship = 4
 attackValue DamagedBattleship = attackValue Battleship
 
+
 attacks :: Unit -> [Unit]
 attacks Infantry = landUnits ++ airUnits
 attacks Artillery = landUnits ++ airUnits
@@ -42,6 +93,7 @@ attacks Cruiser = landUnits ++ airUnits ++ seaUnits
 attacks AircraftCarrier = airUnits ++ seaUnits
 attacks Battleship = landUnits ++ airUnits ++ seaUnits
 attacks DamagedBattleship = attacks Battleship
+
 
 defenseValue :: Unit -> Int
 defenseValue Infantry = 2
@@ -58,13 +110,16 @@ defenseValue AircraftCarrier = 2
 defenseValue Battleship = 4
 defenseValue DamagedBattleship = attackValue Battleship
 
+
 onDestruction :: Unit -> [Unit]
 onDestruction Battleship = [DamagedBattleship]
 onDestruction _ = []
 
+
 numberOfShots :: Unit -> Int
 numberOfShots AntiAirArtillery = 3
 numberOfShots _ = 1
+
 
 unitCost :: Unit -> Int
 unitCost Infantry = 3
@@ -104,11 +159,18 @@ generalCombatDefenseValues :: [Unit] -> [Int]
 generalCombatDefenseValues = (map defenseValue) . sort
 
 generalCombatAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
-generalCombatAppliedLosses army _ 0 = army
+generalCombatAppliedLosses army _ hits
+  | hits <= 0 = army
 generalCombatAppliedLosses [] _ _ = []
-generalCombatAppliedLosses army lossProfile@(next:lp) n
-  | army `elem` next = generalCombatAppliedLosses (delete next army) lossProfile (n-1)
-  | otherwise = generalCombatAppliedLosses army lp n
+generalCombatAppliedLosses army lossProfile hits = generalCombatAppliedLosses' army lossProfile hits
+
+generalCombatAppliedLosses' :: [Unit] -> [Unit] -> Int -> [Unit]
+generalCombatAppliedLosses' army _ 0 = army
+generalCombatAppliedLosses' [] _ _ = []
+generalCombatAppliedLosses' army lossProfile@(next:lp) hits
+  | next `elem` army = generalCombatAppliedLosses' ((delete next army) ++ onDestruction next) lossProfile (hits-1)
+  | otherwise = generalCombatAppliedLosses' army lp hits
+
 
 airDefenseValues :: [Unit] -> [Unit] -> [Int]
 airDefenseValues attackingArmy defendingArmy = replicate nrOfShots (defenseValue AntiAirArtillery)
@@ -117,14 +179,35 @@ airDefenseValues attackingArmy defendingArmy = replicate nrOfShots (defenseValue
     nrOfAAA = count AntiAirArtillery defendingArmy
     nrOfAirUnits = countIf (`elem` airUnits) attackingArmy
 
-airDefenseAppliedLosses :: [Unit] -> [Unit] -> Int -> [Int]
-airDefenseAppliedLosses army lossProfile n = generalCombatAppliedLosses army (lossProfile \\ airUnits) n
+airDefenseAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
+airDefenseAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile \\ airUnits) hits
+
 
 offshoreBombardmentValues :: [Unit] -> [Int]
 offshoreBombardmentValues = (map attackValue) . sort
 
 offshoreBombardmentAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
 offshoreBombardmentAppliedLosses = generalCombatAppliedLosses
+
+
+partitionHits :: Int -> [[Int]]
+partitionHits hits = [[ones, twos, threes, fours] |
+                      ones <- [0..hits],
+                      twos <- [0..hits], ones + twos <= hits,
+                      threes <- [0..hits], ones + twos + threes <= hits,
+                      fours <- [hits - (ones + twos + threes)]]
+
+
+probabilityOfHits :: [Int] -> Int -> Ratio Integer
+probabilityOfHits values hits = 1%1
+  where
+    validPartitions = filter ((<= fours) . (!! 3)) $ filter ((<= threes) . (!! 2)) $ filter ((<= twos) . (!! 1)) $ filter ((<= ones) . (!! 0)) (partitionHits hits)
+    ones = count 1 values
+    twos = count 2 values
+    threes = count 3 values
+    fours = count 4 values
+
+
 
 countIf :: (a -> Bool) -> [a] -> Int
 countIf predicate = length . (filter predicate)
