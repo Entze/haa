@@ -2,14 +2,12 @@ module AxisAndAlliesLibrary where
 
 import Data.List
 import Data.Ratio
+import Data.Tuple.Extra
 
 data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | Submarine | Transport | Destroyer | Cruiser | AircraftCarrier | Battleship | DamagedBattleship deriving (Show, Eq, Ord, Enum, Read, Bounded)
 
-approx :: (Fractional a) => Rational -> a
-approx rat = num / den
-  where
-    num = fromInteger $ numerator rat
-    den = fromInteger $ denominator rat
+binomials :: [[Integer]]
+binomials = [[1],[1],[1,2],[1,3],[1,4,6],[1,5,10],[1,6,15,20],[1,7,21,35]] ++ [1:[l + r | k <- [1..(n `quot` 2)], l <- [binomial (n - 1) (k - 1)], r <- [binomial (n-1) (k)]] | n <- [8..]]
 
 binomial :: (Integral int) => int -> int -> Integer
 binomial _ 0 = 1
@@ -18,7 +16,12 @@ binomial n 1 = fromIntegral n
 binomial n k
   | n == k = 1
   | n < k = 0
-  | otherwise = binomial' (fromIntegral n) (fromIntegral k)
+  | k > (n `quot` 2) = binomial n (n-k)
+  | n > (fromIntegral (maxBound :: Int)) = binomial' (fromIntegral n) (fromIntegral k)
+  | otherwise = (binomials !! n') !! k'
+  where
+    n' = fromIntegral n
+    k' = fromIntegral k
 
 binomial' :: Integer -> Integer -> Integer
 binomial' n k = product num'' `quot` (product (den1' ++ den2'))
@@ -37,17 +40,46 @@ binomialDistributionOfDiceThrows :: (Integral h, Integral n, Integral f) => h ->
 binomialDistributionOfDiceThrows hits throws face = binomialDistributionOfDiceThrows' (fromIntegral hits) (fromIntegral throws) (fromIntegral face)
   where
     binomialDistributionOfDiceThrows' :: Integer -> Integer -> Integer -> Rational
+    binomialDistributionOfDiceThrows' 0 0 _ = 1
     binomialDistributionOfDiceThrows' _ 0 _ = 0
-    binomialDistributionOfDiceThrows' 0 n f = (1 - (f % 6))^n
-    binomialDistributionOfDiceThrows' 1 n f = (n % 1) * (f % 6) * ((1 - (f % 6))^(n-1))
-    binomialDistributionOfDiceThrows' 2 n f = (n^2 % 2) * p^2 * (1 - p)^(n-2) - (n % 2) * p^2 * (1 - p)^(n-2)
-      where
-        p = (f % 6)
-    binomialDistributionOfDiceThrows' h n 1 = (1 % (6^n)) * 5^(n-h) * ((binomial n h) % 1)
-    binomialDistributionOfDiceThrows' h n 2 = (1 % (3^n)) * 2^(n-h) * ((binomial n h) % 1)
-    binomialDistributionOfDiceThrows' h n 3 = (1 % (2^n)) * ((binomial n h) % 1)
-    binomialDistributionOfDiceThrows' h n 4 = (1 % (3^n)) * 2^h * ((binomial n h) % 1)
+    binomialDistributionOfDiceThrows' 0 1 f = (1 - (f % 6))
+    binomialDistributionOfDiceThrows' h n f = (1 % (6^n)) * ((f^h) % 1) * ((binomial n h) % 1) * (((6 - f)^(n-h)) % 1)
 
+
+cumulativeDensity :: Num a => [a] -> [a]
+cumulativeDensity probabilities = cumulativeDensity' probabilities 0
+  where
+    cumulativeDensity' [] _ = []
+    cumulativeDensity' (p:ps) c = p':(cumulativeDensity' ps p')
+      where
+        p' = c+p
+
+groupByCumulativeDensity :: (Num a, Ord a) => [a] -> a -> [(Int, a)]
+groupByCumulativeDensity probabilities epsilon = groupByCumulativeDensity' probabilities 0 0
+  where
+    groupByCumulativeDensity' [] _ _ = []
+    groupByCumulativeDensity' (p:ps) c n
+      | p' < epsilon = groupByCumulativeDensity' ps p' (n+1)
+      | otherwise = (n, p'):(groupByCumulativeDensity' ps 0 (n+1))
+        where
+          p' = p + c
+
+drawDensityGraphWithDescriptionLine :: (Show a, Show b, RealFrac b) => a -> b -> b -> String
+drawDensityGraphWithDescriptionLine description density total = (replicate cells '#') ++ (' ':((show description)) ++ ": " ++ (show value))
+  where
+    value = (density / total)
+    cells = round (value * 40)
+
+
+drawDensityGraphWithDescriptionLines :: (Show a, Show b, RealFrac b) => [a] -> [b] -> [String]
+drawDensityGraphWithDescriptionLines [] _ = []
+drawDensityGraphWithDescriptionLines _ [] = []
+drawDensityGraphWithDescriptionLines descriptions densities = map (uncurry3 drawDensityGraphWithDescriptionLine) (zip3 descriptions densities (repeat s))
+  where
+    s = sum densities
+
+drawDensityGraphWithDescription :: (Show a, Show b, RealFrac b) => [a] -> [b] -> String
+drawDensityGraphWithDescription descriptions densities = unlines (drawDensityGraphWithDescriptionLines descriptions densities)
 
 
 
@@ -198,16 +230,48 @@ partitionHits hits = [[ones, twos, threes, fours] |
                       fours <- [hits - (ones + twos + threes)]]
 
 
-probabilityOfHits :: [Int] -> Int -> Ratio Integer
-probabilityOfHits values hits = 1%1
+probabilityOfHits :: [Int] -> [Rational]
+probabilityOfHits values = probabilityOfHitsWith ones twos threes fours
   where
-    validPartitions = filter ((<= fours) . (!! 3)) $ filter ((<= threes) . (!! 2)) $ filter ((<= twos) . (!! 1)) $ filter ((<= ones) . (!! 0)) (partitionHits hits)
     ones = count 1 values
     twos = count 2 values
     threes = count 3 values
     fours = count 4 values
 
+probabilityOfHitsWith :: Int -> Int -> Int -> Int -> [Rational]
+probabilityOfHitsWith ones twos threes fours = map snd reducedProbabilities
+  where
+    singleProbabilities = sortOn fst (probabilityOfHitsIndexed ones twos threes fours)
+    reducedProbabilities = reduce' singleProbabilities
+    reduce' :: [(Int, Rational)] -> [(Int,Rational)]
+    reduce' ((a,r1):(b,r2):rs)
+      | a == b = reduce' ((a, r1 + r2):rs)
+      | otherwise = (a,r1):(reduce' ((b,r2):rs))
+    reduce' x = x
 
+probabilityOfHitsIndexed :: Int -> Int -> Int -> Int -> [(Int, Rational)]
+probabilityOfHitsIndexed ones twos threes fours = reduce' (probabilityOfHitsSingleIndexed ones twos threes fours)
+  where
+    reduce' :: [(Int, [Rational])] -> [(Int, Rational)]
+    reduce' ((n, p):ls) = (n, product p):(reduce' ls)
+    reduce' [] = []
+
+probabilityOfHitsSingleIndexed :: Int -> Int -> Int -> Int -> [(Int, [Rational])]
+probabilityOfHitsSingleIndexed ones twos threes fours = singleProbabilities
+  where
+    singleProbabilities = [(one + two + three + four,
+                            [(onesProbability !! one),
+                             (twosProbability !! two),
+                             (threesProbability !! three),
+                             (foursProbability !! four)]) |
+                            one <- [0..ones],
+                            two <- [0..twos],
+                            three <- [0..threes],
+                            four <- [0..fours]]
+    onesProbability = map ((flip ((flip binomialDistributionOfDiceThrows) ones)) 1) [0..ones]
+    twosProbability = map ((flip ((flip binomialDistributionOfDiceThrows) twos)) 2) [0..twos]
+    threesProbability = map ((flip ((flip binomialDistributionOfDiceThrows) threes)) 3) [0..threes]
+    foursProbability = map ((flip ((flip binomialDistributionOfDiceThrows) fours)) 4) [0..fours]
 
 countIf :: (a -> Bool) -> [a] -> Int
 countIf predicate = length . (filter predicate)

@@ -2,7 +2,9 @@
 import Test.Hspec
 import Test.QuickCheck
 --import Control.Exception (evaluate)
+import Test.Hspec.Core.QuickCheck (modifyMaxSuccess)
 import AxisAndAlliesLibrary
+import Data.Ratio
 
 main :: IO ()
 main = hspec $ do
@@ -20,6 +22,14 @@ main = hspec $ do
         ((1 :: Int) `binomial` (21 :: Int)) `shouldBe` 0
       it "returns values according to the definition" $
         property $ prop_binomial_equals_definition
+      it "returns values according to the recursive definition" $
+        property $ prop_binomial_equals_recursive_definition
+    describe "binomialDistributionOfDiceThrows" $ do
+      it "returns probabilities, s.t. the sum is one" $
+        property $ prop_binomialDistributionOfDiceThrows_is_one
+  describe "Axis and Allies" $ do
+      modifyMaxSuccess (const 15) $ it "returns probabilities, s.t. the sum is one" $
+        property $ prop_probabilityOfHitsWith_sum_is_one
 
 
 prop_binomial_equals_definition :: (Positive Integer) -> (Positive Integer) -> Bool
@@ -27,3 +37,16 @@ prop_binomial_equals_definition (Positive n) (Positive k) = expected == actual
   where
     expected = (product [1..n]) `div` (product [1..k] * product [1..(n-k)])
     actual = n `binomial` k
+
+
+prop_binomial_equals_recursive_definition :: (Positive Integer) -> (Positive Integer) -> Bool
+prop_binomial_equals_recursive_definition (Positive n) (Positive k) = binomial n k == binomial (n-1) (k-1) + binomial (n-1) k
+
+prop_probabilityOfHitsWith_sum_is_one :: (Positive Int) -> (Positive Int) -> (Positive Int) -> (Positive Int) -> Bool
+prop_probabilityOfHitsWith_sum_is_one (Positive ones) (Positive twos) (Positive threes) (Positive fours) = sum (probabilityOfHitsWith ones twos threes fours) == ((1 % 1) :: Rational)
+
+prop_binomialDistributionOfDiceThrows_is_one :: (Positive Int) -> (Positive Int) -> Bool
+prop_binomialDistributionOfDiceThrows_is_one (Positive a) (Positive f) = (1 % 1) == sum (map ((flip ((flip binomialDistributionOfDiceThrows) amount)) face) [0..amount])
+  where
+    amount = a
+    face = (f `rem` 4) + 1
