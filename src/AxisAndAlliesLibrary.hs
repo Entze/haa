@@ -6,6 +6,8 @@ import Data.Tuple.Extra
 
 data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | Submarine | Transport | Destroyer | Cruiser | AircraftCarrier | Battleship | DamagedBattleship deriving (Show, Eq, Ord, Enum, Read, Bounded)
 
+data GameTree = Win [Unit] Rational | Loss [Unit] Rational | Draw Rational | Inconclusive [Unit] [Unit] Rational [GameTree] deriving (Show, Eq)
+
 binomials :: [[Integer]]
 binomials = [[1],[1],[1,2],[1,3],[1,4,6],[1,5,10],[1,6,15,20],[1,7,21,35]] ++ [1:[l + r | k <- [1..(n `quot` 2)], l <- [binomial (n - 1) (k - 1)], r <- [binomial (n-1) (k)]] | n <- [8..]]
 
@@ -80,7 +82,6 @@ drawDensityGraphWithDescriptionLines descriptions densities = map (uncurry3 draw
 
 drawDensityGraphWithDescription :: (Show a, Show b, RealFrac b) => [a] -> [b] -> String
 drawDensityGraphWithDescription descriptions densities = unlines (drawDensityGraphWithDescriptionLines descriptions densities)
-
 
 
 landUnits :: [Unit]
@@ -272,6 +273,27 @@ probabilityOfHitsSingleIndexed ones twos threes fours = singleProbabilities
     twosProbability = map ((flip ((flip binomialDistributionOfDiceThrows) twos)) 2) [0..twos]
     threesProbability = map ((flip ((flip binomialDistributionOfDiceThrows) threes)) 3) [0..threes]
     foursProbability = map ((flip ((flip binomialDistributionOfDiceThrows) fours)) 4) [0..fours]
+
+
+
+constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> GameTree
+constructGameTreeFromArmies [] _ [] _ = Draw (1%1)
+constructGameTreeFromArmies [] _ defendingArmies _ = Loss defendingArmies (1%1)
+constructGameTreeFromArmies attackingArmies _ [] _ = Win attackingArmies (1%1)
+constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile = (Inconclusive attackingArmies defendingArmies (1 % 1) children)
+  where
+    children = []
+
+  {--
+battleRound :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(BattleOutcome, Int, Rational, [Unit], [Unit])]
+battleRound = undefined
+
+battleOutcomeFromArmies :: [Unit] -> [Unit] -> BattleOutcome
+battleOutcomeFromArmies [] [] = Draw
+battleOutcomeFromArmies [] _ = Loss
+battleOutcomeFromArmies _ [] = Win
+battleOutcomeFromArmies _ _ = Inconclusive
+--}
 
 countIf :: (a -> Bool) -> [a] -> Int
 countIf predicate = length . (filter predicate)
