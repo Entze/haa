@@ -172,9 +172,9 @@ unitCost DamagedBattleship = unitCost Battleship
 
 lowestIPCFirstLandUnits = sortOn unitCost landUnits
 lowestIPCFirstAirUnits = sortOn unitCost airUnits
-lowestIPCFirstSeaUnits = sortOn unitCost seaUnits
+lowestIPCFirstSeaUnits = (reverse .  nub . reverse) ((sortOn unitCost seaUnits) ++ [Transport])
 lowestIPCFirstSeaUnitsOpt = nub (Battleship:lowestIPCFirstSeaUnits)
-lowestIPCFirst = sortOn unitCost (lowestIPCFirstLandUnits ++ lowestIPCFirstAirUnits ++ lowestIPCFirstSeaUnits)
+lowestIPCFirst = (reverse . nub . reverse) ((sortOn unitCost (lowestIPCFirstLandUnits ++ lowestIPCFirstAirUnits ++ lowestIPCFirstSeaUnits)) ++ [Transport])
 lowestIPCFirstOpt = nub (Battleship:lowestIPCFirst)
 
 
@@ -213,7 +213,7 @@ airDefenseValues attackingArmy defendingArmy = replicate nrOfShots (defenseValue
     nrOfAirUnits = countIf (`elem` airUnits) attackingArmy
 
 airDefenseAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
-airDefenseAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile \\ airUnits) hits
+airDefenseAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile `intersect` airUnits) hits
 
 
 offshoreBombardmentValues :: [Unit] -> [Int]
@@ -221,6 +221,21 @@ offshoreBombardmentValues = (map attackValue) . sort
 
 offshoreBombardmentAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
 offshoreBombardmentAppliedLosses = generalCombatAppliedLosses
+
+
+supriseStrikeAttackValues :: [Unit] -> [Unit] -> [Int]
+supriseStrikeAttackValues attackingArmy defendingArmy
+  | Destroyer `notElem` defendingArmy = ((map attackValue) . sort . (filter (== Submarine))) attackingArmy
+  | otherwise = []
+
+supriseStrikeDefenseValues :: [Unit] -> [Unit] -> [Int]
+supriseStrikeDefenseValues attackingArmy defendingArmy
+  | Destroyer `notElem` attackingArmy = ((map defenseValue) . sort . (filter (== Submarine))) defendingArmy
+  | otherwise = []
+
+supriseStrikeAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
+supriseStrikeAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile `intersect` seaUnits) hits
+
 
 
 partitionHits :: Int -> [[Int]]
@@ -242,7 +257,7 @@ probabilityOfHits values = probabilityOfHitsWith ones twos threes fours
 probabilityOfHitsWith :: Int -> Int -> Int -> Int -> [Rational]
 probabilityOfHitsWith ones twos threes fours = map snd reducedProbabilities
   where
-    singleProbabilities = sortOn fst (probabilityOfHitsIndexed ones twos threes fours)
+    singleProbabilities = sortOn fst (probabilityOfHitsWithIndexed ones twos threes fours)
     reducedProbabilities = reduce' singleProbabilities
     reduce' :: [(Int, Rational)] -> [(Int,Rational)]
     reduce' ((a,r1):(b,r2):rs)
@@ -250,15 +265,24 @@ probabilityOfHitsWith ones twos threes fours = map snd reducedProbabilities
       | otherwise = (a,r1):(reduce' ((b,r2):rs))
     reduce' x = x
 
-probabilityOfHitsIndexed :: Int -> Int -> Int -> Int -> [(Int, Rational)]
-probabilityOfHitsIndexed ones twos threes fours = reduce' (probabilityOfHitsSingleIndexed ones twos threes fours)
+
+probabilityOfHitsIndexed :: [Int] -> [(Int, Rational)]
+probabilityOfHitsIndexed values = probabilityOfHitsWithIndexed ones twos threes fours
+  where
+    ones = count 1 values
+    twos = count 2 values
+    threes = count 3 values
+    fours = count 4 values
+
+probabilityOfHitsWithIndexed :: Int -> Int -> Int -> Int -> [(Int, Rational)]
+probabilityOfHitsWithIndexed ones twos threes fours = reduce' (probabilityOfHitsWithSingleIndexed ones twos threes fours)
   where
     reduce' :: [(Int, [Rational])] -> [(Int, Rational)]
     reduce' ((n, p):ls) = (n, product p):(reduce' ls)
     reduce' [] = []
 
-probabilityOfHitsSingleIndexed :: Int -> Int -> Int -> Int -> [(Int, [Rational])]
-probabilityOfHitsSingleIndexed ones twos threes fours = singleProbabilities
+probabilityOfHitsWithSingleIndexed :: Int -> Int -> Int -> Int -> [(Int, [Rational])]
+probabilityOfHitsWithSingleIndexed ones twos threes fours = singleProbabilities
   where
     singleProbabilities = [(one + two + three + four,
                             [(onesProbability !! one),
@@ -275,14 +299,20 @@ probabilityOfHitsSingleIndexed ones twos threes fours = singleProbabilities
     foursProbability = map ((flip ((flip binomialDistributionOfDiceThrows) fours)) 4) [0..fours]
 
 
-
-constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> GameTree
-constructGameTreeFromArmies [] _ [] _ = Draw (1%1)
-constructGameTreeFromArmies [] _ defendingArmies _ = Loss defendingArmies (1%1)
-constructGameTreeFromArmies attackingArmies _ [] _ = Win attackingArmies (1%1)
-constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile = (Inconclusive attackingArmies defendingArmies (1 % 1) children)
+constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(Int, Rational, [Unit], [Unit])]
+constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile = constructGameTreeFromArmies' [(0, 1 % 1, attackingArmies, defendingArmies)]
   where
-    children = []
+    {--
+    constructGameTreeFromArmies' (b@(0, _, a, d):bs)
+      | any (`elem` a) landUnits && (BattleShip `elem` a || Cruiser `elem` a) =
+--}
+    constructGameTreeFromArmies' (b@(depth, probability, a, d):bs)
+   --   | (Submarine `elem` a && Destroyer `notElem` d) || (Submarine `elem` d && Destroyer `notElem` a) =
+      | otherwise = b:(constructGameTreeFromArmies' (bs ++ children))
+      where
+--        probabilityOfHits = sortOn snd (probabilityOfHitsIndexed (attac))
+        children = []
+    constructGameTreeFromArmies' x = x
 
   {--
 battleRound :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(BattleOutcome, Int, Rational, [Unit], [Unit])]
