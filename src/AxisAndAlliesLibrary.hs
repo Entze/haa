@@ -302,16 +302,20 @@ probabilityOfHitsWithSingleIndexed ones twos threes fours = singleProbabilities
 constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(Int, Rational, [Unit], [Unit])]
 constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile = constructGameTreeFromArmies' [(0, 1 % 1, attackingArmies, defendingArmies)]
   where
+    constructGameTreeFromArmies' (b@(_, _, [], _):bs) = b:(constructGameTreeFromArmies' bs)
+    constructGameTreeFromArmies' (b@(_, _, _, []):bs) = b:(constructGameTreeFromArmies' bs)
     {--
     constructGameTreeFromArmies' (b@(0, _, a, d):bs)
       | any (`elem` a) landUnits && (BattleShip `elem` a || Cruiser `elem` a) =
 --}
-    constructGameTreeFromArmies' (b@(depth, probability, a, d):bs)
+    constructGameTreeFromArmies' (b@(depth, _, a, d):bs)
    --   | (Submarine `elem` a && Destroyer `notElem` d) || (Submarine `elem` d && Destroyer `notElem` a) =
       | otherwise = b:(constructGameTreeFromArmies' (bs ++ children))
       where
---        probabilityOfHits = sortOn snd (probabilityOfHitsIndexed (attac))
         children = []
+        --children = map (\(hits, probability) -> (depth + 1, probability
+        --probsOfHitsAttack = sortOn snd (probabilityOfHitsIndexed (generalCombatAttackValues a d))
+        --probsOfHitsDefend = sortOn snd (probabilityOfHitsIndexed (generalCombatDefenseValues a d))
     constructGameTreeFromArmies' x = x
 
   {--
