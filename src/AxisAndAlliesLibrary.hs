@@ -8,6 +8,8 @@ data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | 
 
 data GameTree = Win [Unit] Rational | Loss [Unit] Rational | Draw Rational | Inconclusive [Unit] [Unit] Rational [GameTree] deriving (Show, Eq)
 
+data RoundType = AirDefense | SupriseStrikeAttacker | SupriseStrikeDefender Int | GeneralCombatAttacker | GeneralCombatDefender Int
+
 binomials :: [[Integer]]
 binomials = [[1],[1],[1,2],[1,3],[1,4,6],[1,5,10],[1,6,15,20],[1,7,21,35]] ++ [1:[l + r | k <- [1..(n `quot` 2)], l <- [binomial (n - 1) (k - 1)], r <- [binomial (n-1) (k)]] | n <- [8..]]
 
@@ -179,7 +181,7 @@ lowestIPCFirstOpt = nub (Battleship:lowestIPCFirst)
 
 
 generalCombatAttackValues :: [Unit] -> [Int]
-generalCombatAttackValues attackingArmy = sort (generalCombatAttackValues' (sort attackingArmy))
+generalCombatAttackValues attackingArmy = sortOn fst (generalCombatAttackValues' (sort attackingArmy))
 
 generalCombatAttackValues' :: [Unit] -> [Int]
 generalCombatAttackValues' (Infantry:army)
@@ -189,7 +191,7 @@ generalCombatAttackValues' (unit:army) = (attackValue unit):(generalCombatAttack
 generalCombatAttackValues' [] = []
 
 generalCombatDefenseValues :: [Unit] -> [Int]
-generalCombatDefenseValues = (map defenseValue) . sort
+generalCombatDefenseValues = map defenseValues
 
 generalCombatAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
 generalCombatAppliedLosses army _ hits
@@ -215,12 +217,6 @@ airDefenseValues attackingArmy defendingArmy = replicate nrOfShots (defenseValue
 airDefenseAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
 airDefenseAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile `intersect` airUnits) hits
 
-
-offshoreBombardmentValues :: [Unit] -> [Int]
-offshoreBombardmentValues = (map attackValue) . sort
-
-offshoreBombardmentAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
-offshoreBombardmentAppliedLosses = generalCombatAppliedLosses
 
 
 supriseStrikeAttackValues :: [Unit] -> [Unit] -> [Int]
@@ -299,38 +295,37 @@ probabilityOfHitsWithSingleIndexed ones twos threes fours = singleProbabilities
     foursProbability = map ((flip ((flip binomialDistributionOfDiceThrows) fours)) 4) [0..fours]
 
 
-constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(Int, Rational, [Unit], [Unit])]
-constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile = constructGameTreeFromArmies' [(0, 1 % 1, attackingArmies, defendingArmies)]
+constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile
+  | any (`elem` attackingArmies) airUnits && AntiAirArtillery `elem` defendingArmies = constructGameTreeFromArmies' [(AirDefense, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | Submarine `elem` attackingArmies && Destroyer `notElem` defendingArmies = constructGameTreeFromArmies' [(SupriseStrikeAttacker, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | Submarine `elem` defendingArmies && Destroyer `notElem` attackingArmies = constructGameTreeFromArmies' [(SupriseStrikeDefender 0, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | otherwise = constructGameTreeFromArmies' [(GeneralCombatAttacker, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
   where
-    constructGameTreeFromArmies' (b@(_, _, [], _):bs) = b:(constructGameTreeFromArmies' bs)
-    constructGameTreeFromArmies' (b@(_, _, _, []):bs) = b:(constructGameTreeFromArmies' bs)
-    {--
-    constructGameTreeFromArmies' (b@(0, _, a, d):bs)
-      | any (`elem` a) landUnits && (BattleShip `elem` a || Cruiser `elem` a) =
---}
-    constructGameTreeFromArmies' (b@(depth, _, a, d):bs)
-   --   | (Submarine `elem` a && Destroyer `notElem` d) || (Submarine `elem` d && Destroyer `notElem` a) =
-      | otherwise = b:(constructGameTreeFromArmies' (bs ++ children))
+    constructGameTreeFromArmies' (b@(_, _, _, _, [], _):bs) = b:(constructGameTreeFromArmies' bs)
+    constructGameTreeFromArmies' (b@(_, _, _, _, _, []):bs) = b:(constructGameTreeFromArmies' bs)
+    constructGameTreeFromArmies' (b@(GeneralCombatAttacker, depth, _, continuedProbability, a, d):bs) = b:(constructGameTreeFromArmies' (bs ++ children))
       where
-        children = []
-        --children = map (\(hits, probability) -> (depth + 1, probability
-        --probsOfHitsAttack = sortOn snd (probabilityOfHitsIndexed (generalCombatAttackValues a d))
-        --probsOfHitsDefend = sortOn snd (probabilityOfHitsIndexed (generalCombatDefenseValues a d))
+        children = map (\(hits, prob) -> (GeneralCombatDefender hits, depth + 1, prob, continuedProbability * prob, (filter (=/ Battleship) (filter (=/ Cruiser) a), d)) hitsWithProbs
+        hitsWithProbs = sortOn snd (probabilityOfHitsIndexed armyStrength)
+        armyStrength = generalCombatAttackValues a
+    constructGameTreeFromArmies' (b@(GeneralCombatDefender attackerHits, depth, _, continuedProbability, a, d):bs) = b:(constructGameTreeFromArmies' (bs ++ children))
+      where
+        children = map (\(hits, prob) -> getChild hits prob a d) hitsWithProbs
+        hitsWithProbs = sortOn snd (probabilityOfHitsIndexed armyStrength)
+        armyStrength = generalCombatDefenseValues d
+        getChild defenderHits prob attackingArmies defendingArmies = (GeneralCombatAttacker, depth + 1, prob, continuedProbability * prob, a, d)
     constructGameTreeFromArmies' x = x
 
-  {--
-battleRound :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(BattleOutcome, Int, Rational, [Unit], [Unit])]
-battleRound = undefined
-
-battleOutcomeFromArmies :: [Unit] -> [Unit] -> BattleOutcome
-battleOutcomeFromArmies [] [] = Draw
-battleOutcomeFromArmies [] _ = Loss
-battleOutcomeFromArmies _ [] = Win
-battleOutcomeFromArmies _ _ = Inconclusive
---}
 
 countIf :: (a -> Bool) -> [a] -> Int
 countIf predicate = length . (filter predicate)
 
 count :: Eq a => a -> [a] -> Int
 count el = countIf (== el)
+
+deleteAll :: Eq a => [a] -> a -> [a]
+deleteAll (a:as) el
+  | a == el = deleteAll as el
+  | otherwise a:(deleteAll as el)
+deleteAll as _ = as
