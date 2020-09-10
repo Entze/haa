@@ -6,9 +6,9 @@ import Data.Tuple.Extra
 
 data Unit = Infantry | Artillery | Tank | AntiAirArtillery | Fighter | Bomber | Submarine | Transport | Destroyer | Cruiser | AircraftCarrier | Battleship | DamagedBattleship deriving (Show, Eq, Ord, Enum, Read, Bounded)
 
-data GameTree = Win [Unit] Rational | Loss [Unit] Rational | Draw Rational | Inconclusive [Unit] [Unit] Rational [GameTree] deriving (Show, Eq)
 
-data RoundType = AirDefense | SupriseStrikeAttacker | SupriseStrikeDefender Int | GeneralCombatAttacker | GeneralCombatDefender Int
+-- Type (SubmarineStrikes = Strikes that cannot hit AirUnits) (AirUnitStrikes = Strikes that cannot hit Submarines) (GeneralStrikes)
+data RoundType = AirDefense | Offshorebombardment | SupriseStrikeAttacker | SupriseStrikeDefender Int | SubmarineAttacker | AirUnitsAttacker Int | GeneralCombatAttacker Int Int Int | SubmarineDefender Int Int Int | AirUnitsDefender Int Int Int | GeneralCombatDefender Int Int Int deriving (Show, Eq)
 
 binomials :: [[Integer]]
 binomials = [[1],[1],[1,2],[1,3],[1,4,6],[1,5,10],[1,6,15,20],[1,7,21,35]] ++ [1:[l + r | k <- [1..(n `quot` 2)], l <- [binomial (n - 1) (k - 1)], r <- [binomial (n-1) (k)]] | n <- [8..]]
@@ -181,7 +181,7 @@ lowestIPCFirstOpt = nub (Battleship:lowestIPCFirst)
 
 
 generalCombatAttackValues :: [Unit] -> [Int]
-generalCombatAttackValues attackingArmy = sortOn fst (generalCombatAttackValues' (sort attackingArmy))
+generalCombatAttackValues = generalCombatAttackValues' . sort
 
 generalCombatAttackValues' :: [Unit] -> [Int]
 generalCombatAttackValues' (Infantry:army)
@@ -191,7 +191,7 @@ generalCombatAttackValues' (unit:army) = (attackValue unit):(generalCombatAttack
 generalCombatAttackValues' [] = []
 
 generalCombatDefenseValues :: [Unit] -> [Int]
-generalCombatDefenseValues = map defenseValues
+generalCombatDefenseValues = map defenseValue
 
 generalCombatAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
 generalCombatAppliedLosses army _ hits
@@ -201,6 +201,7 @@ generalCombatAppliedLosses army lossProfile hits = generalCombatAppliedLosses' a
 
 generalCombatAppliedLosses' :: [Unit] -> [Unit] -> Int -> [Unit]
 generalCombatAppliedLosses' army _ 0 = army
+generalCombatAppliedLosses' army [] _ = army
 generalCombatAppliedLosses' [] _ _ = []
 generalCombatAppliedLosses' army lossProfile@(next:lp) hits
   | next `elem` army = generalCombatAppliedLosses' ((delete next army) ++ onDestruction next) lossProfile (hits-1)
@@ -217,20 +218,21 @@ airDefenseValues attackingArmy defendingArmy = replicate nrOfShots (defenseValue
 airDefenseAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
 airDefenseAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile `intersect` airUnits) hits
 
+offshoreBombardmentValues :: [Unit] -> [Int]
+offshoreBombardmentValues attackingArmy = replicate nrOfCruisers (attackValue Cruiser) ++ replicate nrOfBattleships (attackValue Battleship)
+  where
+    nrOfCruisers = count Cruiser attackingArmy
+    nrOfBattleships = count Battleship attackingArmy
 
 
-supriseStrikeAttackValues :: [Unit] -> [Unit] -> [Int]
-supriseStrikeAttackValues attackingArmy defendingArmy
-  | Destroyer `notElem` defendingArmy = ((map attackValue) . sort . (filter (== Submarine))) attackingArmy
-  | otherwise = []
+supriseStrikeAttackValues :: [Unit] -> [Int]
+supriseStrikeAttackValues = generalCombatAttackValues . (filter (== Submarine))
 
-supriseStrikeDefenseValues :: [Unit] -> [Unit] -> [Int]
-supriseStrikeDefenseValues attackingArmy defendingArmy
-  | Destroyer `notElem` attackingArmy = ((map defenseValue) . sort . (filter (== Submarine))) defendingArmy
-  | otherwise = []
+supriseStrikeDefenseValues :: [Unit] -> [Int]
+supriseStrikeDefenseValues = generalCombatDefenseValues . (filter (== Submarine))
 
 supriseStrikeAppliedLosses :: [Unit] -> [Unit] -> Int -> [Unit]
-supriseStrikeAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile `intersect` seaUnits) hits
+supriseStrikeAppliedLosses army lossProfile hits = generalCombatAppliedLosses army (lossProfile `intersect` (attacks Submarine)) hits
 
 
 
@@ -271,8 +273,13 @@ probabilityOfHitsIndexed values = probabilityOfHitsWithIndexed ones twos threes 
     fours = count 4 values
 
 probabilityOfHitsWithIndexed :: Int -> Int -> Int -> Int -> [(Int, Rational)]
-probabilityOfHitsWithIndexed ones twos threes fours = reduce' (probabilityOfHitsWithSingleIndexed ones twos threes fours)
+probabilityOfHitsWithIndexed ones twos threes fours = (reduce'' . reduce') (probabilityOfHitsWithSingleIndexed ones twos threes fours)
   where
+    reduce'' :: [(Int, Rational)] -> [(Int, Rational)]
+    reduce'' (a@(n1, p1):b@(n2, p2):ls)
+      | n1 == n2 = reduce'' ((n1, p1 + p2):ls)
+      | otherwise = a:(reduce'' (b:ls))
+    reduce'' x = x
     reduce' :: [(Int, [Rational])] -> [(Int, Rational)]
     reduce' ((n, p):ls) = (n, product p):(reduce' ls)
     reduce' [] = []
@@ -294,27 +301,85 @@ probabilityOfHitsWithSingleIndexed ones twos threes fours = singleProbabilities
     threesProbability = map ((flip ((flip binomialDistributionOfDiceThrows) threes)) 3) [0..threes]
     foursProbability = map ((flip ((flip binomialDistributionOfDiceThrows) fours)) 4) [0..fours]
 
+airDefense :: [Unit] -> (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+airDefense attackingLossProfile (AirDefense, depth, _, continuedProbability, attackingArmies, defendingArmies) = outcomes
+  where
+    outcomes :: [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+    outcomes = map (\(hits, prob) -> (GeneralCombatAttacker 0 0 0, depth + 1, prob, continuedProbability * prob, airDefenseAppliedLosses attackingArmies attackingLossProfile hits, defendingArmies)) probabilitiesOfHits
+    probabilitiesOfHits = sortOn ((1 -) . snd) (probabilityOfHitsIndexed strength)
+    strength = airDefenseValues attackingArmies defendingArmies
+airDefense _ _ = []
+
+offshoreBombardment :: (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+offshoreBombardment (Offshorebombardment, depth, _, continuedProbability, attackingArmies, defendingArmies) = outcomes
+  where
+    outcomes = map (\(hits, prob) -> (GeneralCombatAttacker 0 0 hits, depth + 1, prob, continuedProbability * prob, ((filter (/= Battleship)) . (filter (/= Cruiser))) attackingArmies, defendingArmies)) probabilitiesOfHits
+    probabilitiesOfHits = sortOn ((1 -) . snd) (probabilityOfHitsIndexed strength)
+    strength = offshoreBombardmentValues attackingArmies
+offshoreBombardment _ = []
+
+supriseStrike :: [Unit] -> [Unit] -> (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+supriseStrike attackingLossProfile defendingLossProfile (SupriseStrikeAttacker, depth, _, continuedProbability, attackingArmies, defendingArmies)
+  | Destroyer `notElem` attackingArmies && Submarine `elem` defendingArmies = map (\(hits, prob) -> (SupriseStrikeDefender hits, depth + 1, prob, continuedProbability * prob, attackingArmies, defendingArmies)) probabilitiesOfHits
+  | any (`elem` attackingArmies) airUnits = map (\(hits, prob) -> (AirUnitsAttacker 0, depth + 1, prob, continuedProbability * prob, attackingArmies, supriseStrikeAppliedLosses defendingArmies defendingLossProfile hits)) probabilitiesOfHits
+  | otherwise = map (\(hits, prob) -> (GeneralCombatAttacker 0 0 0, depth + 1, prob, continuedProbability * prob, attackingArmies, supriseStrikeAppliedLosses defendingArmies defendingLossProfile hits)) probabilitiesOfHits
+  where
+    probabilitiesOfHits = sortOn ((1 -) . snd) (probabilityOfHitsIndexed strength)
+    strength = supriseStrikeAttackValues attackingArmies
+supriseStrike attackingLossProfile defendingLossProfile (SupriseStrikeDefender attackHits, depth, _, continuedProbability, attackingArmies, defendingArmies)
+  | Submarine `elem` attackingArmies && Destroyer `elem` defendingArmies = map (\(hits, prob) -> (SubmarineAttacker, depth + 1, prob, continuedProbability * prob, supriseStrikeAppliedLosses attackingLossProfile attackingArmies hits, defendingArmies)) probabilitiesOfHits
+  | any (`elem` attackingArmies) airUnits = map (\(hits, prob) -> (AirUnitsAttacker 0, depth + 1, prob, continuedProbability * prob, supriseStrikeAppliedLosses attackingArmies attackingLossProfile hits, supriseStrikeAppliedLosses defendingLossProfile defendingArmies attackHits)) probabilitiesOfHits
+  | otherwise = map (\(hits, prob) -> (GeneralCombatAttacker 0 0 0, depth + 1, prob, continuedProbability * prob, supriseStrikeAppliedLosses attackingArmies attackingLossProfile hits, supriseStrikeAppliedLosses defendingArmies defendingLossProfile attackHits)) probabilitiesOfHits
+  where
+    probabilitiesOfHits = sortOn ((1 -) . snd) (probabilityOfHitsIndexed strength)
+    strength = supriseStrikeDefenseValues defendingArmies
+supriseStrike _ _ _ = []
+
+submarineAttack :: (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+submarineAttack (SubmarineAttacker, depth, _, continuedProbability, attackingArmies, defendingArmies)
+  | any (`elem` attackingArmies) airUnits = map (\(hits, prob) -> (AirUnitsAttacker hits, depth + 1, prob, continuedProbability * prob, attackingArmies, defendingArmies)) probabilitiesOfHits
+  | otherwise = map (\(hits, prob) -> (GeneralCombatAttacker hits 0 0, depth + 1, prob, continuedProbability * prob, attackingArmies, defendingArmies)) probabilitiesOfHits
+  where
+    probabilitiesOfHits = sortOn ((1 -) . snd) (probabilityOfHitsIndexed strength)
+    strength = supriseStrikeAttackValues attackingArmies
+submarineAttack (SubmarineDefender subHits airHits genHits, depth, _, continuedProbability, attackingArmies, defendingArmies)
+  | any (`elem` defendingArmies) airUnits = map (\(hits, prob) -> (AirUnitsDefender (subHits + hits) airHits genHits, depth + 1, prob, continuedProbability * prob, attackingArmies, defendingArmies)) probabilitiesOfHits
+  | otherwise = map (\(hits, prob) -> (GeneralCombatAttacker (subHits + hits) airHits genHits, depth + 1, prob, continuedProbability * prob, attackingArmies, defendingArmies)) probabilitiesOfHits
+  where
+    probabilitiesOfHits = sortOn ((1 -) . snd) (probabilityOfHitsIndexed strength)
+    strength = supriseStrikeAttackValues attackingArmies
+submarineAttack _ = []
+
+
+--airUnitAttack :: (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
+
+--generalCombat :: (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
 
 constructGameTreeFromArmies :: [Unit] -> [Unit] -> [Unit] -> [Unit] -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
 constructGameTreeFromArmies attackingArmies attackingLossProfile defendingArmies defendingLossProfile
   | any (`elem` attackingArmies) airUnits && AntiAirArtillery `elem` defendingArmies = constructGameTreeFromArmies' [(AirDefense, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | all (`notElem` defendingArmies) seaUnits && (Cruiser `elem` attackingArmies || Battleship `elem` attackingArmies) = constructGameTreeFromArmies' [(Offshorebombardment, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
   | Submarine `elem` attackingArmies && Destroyer `notElem` defendingArmies = constructGameTreeFromArmies' [(SupriseStrikeAttacker, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | Submarine `elem` attackingArmies && Destroyer `elem` defendingArmies = constructGameTreeFromArmies' [(SubmarineAttacker, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | any (`elem` attackingArmies) airUnits = constructGameTreeFromArmies' [(AirUnitsAttacker 0, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
   | Submarine `elem` defendingArmies && Destroyer `notElem` attackingArmies = constructGameTreeFromArmies' [(SupriseStrikeDefender 0, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
-  | otherwise = constructGameTreeFromArmies' [(GeneralCombatAttacker, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
+  | otherwise = constructGameTreeFromArmies' [(GeneralCombatAttacker 0 0 0, 0, 1 % 1, 1 % 1, attackingArmies, defendingArmies)]
   where
+    constructGameTreeFromArmies' :: [(RoundType, Int, Rational, Rational, [Unit], [Unit])] -> [(RoundType, Int, Rational, Rational, [Unit], [Unit])]
     constructGameTreeFromArmies' (b@(_, _, _, _, [], _):bs) = b:(constructGameTreeFromArmies' bs)
     constructGameTreeFromArmies' (b@(_, _, _, _, _, []):bs) = b:(constructGameTreeFromArmies' bs)
-    constructGameTreeFromArmies' (b@(GeneralCombatAttacker, depth, _, continuedProbability, a, d):bs) = b:(constructGameTreeFromArmies' (bs ++ children))
+    constructGameTreeFromArmies' (b@(_, depth, p, continuedProbability, a, d):bs)
+      | attackerCanAttack && not defenderCanAttack = (GeneralCombatAttacker 0 0 0, depth, p, continuedProbability, a, []):(constructGameTreeFromArmies' bs)
+      | not attackerCanAttack && defenderCanAttack = (GeneralCombatAttacker 0 0 0, depth, p, continuedProbability, [], d):(constructGameTreeFromArmies' bs)
+      | not attackerCanAttack && not defenderCanAttack = (GeneralCombatAttacker 0 0 0, depth, p, continuedProbability, a, d):(constructGameTreeFromArmies' bs)
+        where
+          attackerCanAttack = any (`elem` attacksUnits) d
+          defenderCanAttack = any (`elem` defendsUnits) a
+          attacksUnits = (nub . concat) (map attacks (nub a))
+          defendsUnits = (nub . concat) (map attacks (nub d))
+    constructGameTreeFromArmies' (b:bs) = b:(constructGameTreeFromArmies' (bs ++ children))
       where
-        children = map (\(hits, prob) -> (GeneralCombatDefender hits, depth + 1, prob, continuedProbability * prob, (filter (=/ Battleship) (filter (=/ Cruiser) a), d)) hitsWithProbs
-        hitsWithProbs = sortOn snd (probabilityOfHitsIndexed armyStrength)
-        armyStrength = generalCombatAttackValues a
-    constructGameTreeFromArmies' (b@(GeneralCombatDefender attackerHits, depth, _, continuedProbability, a, d):bs) = b:(constructGameTreeFromArmies' (bs ++ children))
-      where
-        children = map (\(hits, prob) -> getChild hits prob a d) hitsWithProbs
-        hitsWithProbs = sortOn snd (probabilityOfHitsIndexed armyStrength)
-        armyStrength = generalCombatDefenseValues d
-        getChild defenderHits prob attackingArmies defendingArmies = (GeneralCombatAttacker, depth + 1, prob, continuedProbability * prob, a, d)
+        children = concat [airDefense attackingLossProfile b, offshoreBombardment b, supriseStrike attackingLossProfile defendingLossProfile b, submarineAttack b]
     constructGameTreeFromArmies' x = x
 
 
@@ -327,5 +392,5 @@ count el = countIf (== el)
 deleteAll :: Eq a => [a] -> a -> [a]
 deleteAll (a:as) el
   | a == el = deleteAll as el
-  | otherwise a:(deleteAll as el)
+  | otherwise = a:(deleteAll as el)
 deleteAll as _ = as
