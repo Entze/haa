@@ -446,24 +446,78 @@ outcomeFromArmies a d
     a' = armyCanAttack a
     d' = armyCanAttack d
 
-compressInformation :: [([Unit], Rational)] -> [([Unit], Rational)]
-compressInformation = compressInformation' . (map sortOn fst) . (map (\(units, rational) -> (sort units, rational)))
+compressLeftOverUnits :: [([Unit], Rational)] -> [([Unit], Rational)]
+compressLeftOverUnits = compressLeftOverUnits' . (sortOn fst) . (map (\(units, rational) -> (sort units, rational)))
   where
-    compressInformation' a@(u1, p1):b@(u2, p2):ls
-      | u1 == u2 = compressInformation' ((u1, p1 + p2):ls)
-      | otherwise = a:(compressInformation' (b:ls))
-    compressInformation' x = x
+    compressLeftOverUnits' :: [([Unit], Rational)] -> [([Unit], Rational)]
+    compressLeftOverUnits' (a@(u1, p1):b@(u2, p2):ls)
+      | u1 == u2 = compressLeftOverUnits' ((u1, p1 + p2):ls)
+      | otherwise = a:(compressLeftOverUnits' (b:ls))
+    compressLeftOverUnits' x = x
 
-type Information = ((Outcome, Rational, [([Unit], Rational)]), (Outcome, Rational, [([Unit], Rational)]), (Outcome, [(([Unit], [Unit]), Rational)]), (Outcome, Rational))
+compressLeftOverUnitsDraw :: [(([Unit], [Unit]), Rational)] -> [(([Unit], [Unit]), Rational)]
+compressLeftOverUnitsDraw = compressLeftOverUnits' . (sortOn fst) . (map (\((unitsA, unitsD), rational) -> ((sort unitsA, sort unitsD), rational)))
+  where
+    compressLeftOverUnits' :: [(([Unit], [Unit]), Rational)] -> [(([Unit], [Unit]), Rational)]
+    compressLeftOverUnits' (a@(u1@(u1a, u1b), p1):b@((u2a, u2b), p2):ls)
+      | u1a == u2a && u1b == u2b = compressLeftOverUnits' ((u1, p1 + p2):ls)
+      | otherwise = a:(compressLeftOverUnits' (b:ls))
+    compressLeftOverUnits' x = x
+
+
+compressInformation :: Information -> Information
+compressInformation ((a, pa, ula), (d, pd, uld), (dr, pdr, uldr)) = ((a, pa, compressLeftOverUnits ula), (d, pd, compressLeftOverUnits uld), (dr, pdr, compressLeftOverUnitsDraw uldr))
+
+
+type Information = ((Outcome, Rational, [([Unit], Rational)]), (Outcome, Rational, [([Unit], Rational)]), (Outcome, Rational, [(([Unit], [Unit]), Rational)]))
+
+nullInformation :: Information
+nullInformation = ((Attacker, 0 % 1, []), (Defender, 0 % 1, []), (Draw, 0 % 1, []))
 
 addInformationFromNode :: Information -> (RoundType, Int, Rational, Rational, [Unit], [Unit]) -> Information
-addInformationFromNode (attacker@(Attacker, overAllProbabilityAttacker, unitsLeftAttacker), defender@(Defender, overAllProbabilityDefender, unitsLeftDefender), draw@(Draw, overallProbabilityDraw, unitsLeftDraw), Inconclusive) (_, _, _, p, a, d)
-  | outcome == Attacker = ((Attacker, overAllProbabilityAttacker + p, ((a,p):unitsLeftAttacker)), defender, draw, Inconclusive)
-  | outcome == Defender = (attacker, (Defender, overallProbabilityDefender + p, ((d,p):unitsLeftDefender)), draw, Inconclusive)
-  | outcome == Draw = (attacker, defender, (Draw, overallProbabilityDraw + p, ((a,d),p):unitsLeftDraw), Inconclusive)
+addInformationFromNode (attacker@(Attacker, overallProbabilityAttacker, unitsLeftAttacker), defender@(Defender, overallProbabilityDefender, unitsLeftDefender), draw@(Draw, overallProbabilityDraw, unitsLeftDraw)) (_, _, _, p, a, d)
+  | outcome == Attacker = ((Attacker, overallProbabilityAttacker + p, ((a,p):unitsLeftAttacker)), defender, draw)
+  | outcome == Defender = (attacker, (Defender, overallProbabilityDefender + p, ((d,p):unitsLeftDefender)), draw)
+  | outcome == Draw = (attacker, defender, (Draw, overallProbabilityDraw + p, ((a,d),p):unitsLeftDraw))
     where
       outcome = outcomeFromArmies a d
 addInformationFromNode x _ = x
+
+extractInformation :: [(RoundType, Int, Rational, Rational, [Unit], [Unit])] -> [Information]
+extractInformation ns = extractInformation' nullInformation ns
+  where
+    extractInformation' info (n:ns) = info':(extractInformation' (addInformationFromNode info' n) ns)
+      where
+        info' = compressInformation info
+
+
+noLeftover :: Information -> ((Outcome, Rational), (Outcome, Rational), (Outcome, Rational), (Outcome, Rational))
+noLeftover ((a, pa, _), (d, pd, _), (dr, pdr, _)) = ((a, pa), (d, pd), (dr, pdr), (Inconclusive, inconclusiveP))
+  where
+    inconclusiveP = 1 - (pa + pd + pdr)
+
+
+convertToData :: Information -> [(Outcome, Rational)]
+convertToData ((a, pa, _), (d, pd, _), (dr, pdr, _)) = zip [a, d, dr, Inconclusive] [pa, pd, pdr, 1-(pa +pd + pdr)]
+
+convertToDataLeftoverAttacker :: Information -> [([Unit], Rational)]
+convertToDataLeftoverAttacker ((_, _, a), _, _) = a
+
+convertToDataLeftoverDefender :: Information -> [([Unit], Rational)]
+convertToDataLeftoverDefender (_, (_, _, d), _) = d
+
+convertToDataLeftoverDraw :: Information -> [(([Unit], [Unit]), Rational)]
+convertToDataLeftoverDraw (_, _, (_, _, d)) = d
+
+convertToPercentage :: Fractional b => [(a, Rational)] -> [(a, b)]
+convertToPercentage i = zip a (map fromRational r)
+  where
+    (a, r) = unzip i
+
+
+takeUntilInconclusiveIsSmallerThan :: (Ord a, Fractional a) => a -> [Information] -> [Information]
+takeUntilInconclusiveIsSmallerThan eps = takeWhile (((>= eps) . fromRational . (!! 3) . snd . unzip . convertToData))
+
 
 countIf :: (a -> Bool) -> [a] -> Int
 countIf predicate = length . (filter predicate)
